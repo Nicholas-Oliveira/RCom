@@ -12,6 +12,14 @@
 #define _POSIX_SOURCE 1 // POSIX compliant source
 #define BUF_SIZE 256
 
+#define FLAG 0x7E
+
+#define A_SENDER 0x03
+#define A_RECEIVER 0x01
+
+#define C_SET 0x03
+#define C_UA 0x07
+
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
@@ -30,23 +38,33 @@ int llOpenTx(LinkLayer llParameters)
 
     printf("Serial port %s opened\n", llParameters.serialPort);
 
-    // Create string to send
-    unsigned char buf[BUF_SIZE] = {0};
+    // preparar o set tal como pedido no enunciado
+    unsigned char set[5] = {FLAG, A_SENDER, C_SET, A_SENDER ^ C_SET, FLAG};
 
-    for (int i = 0; i < BUF_SIZE; i++)
-    {
-        buf[i] = 'a' + i % 26;
-    }
-
-    // In non-canonical mode, '\n' does not end the writing.
-    // Test this condition by placing a '\n' in the middle of the buffer.
-    // The whole buffer must be sent even with the '\n'.
-    //buf[5] = '\n';
-    int bytes = writeBytesSerialPort(buf, BUF_SIZE);
+    int bytes = writeBytesSerialPort(set, 5);
     printf("%d bytes written to serial port\n", bytes);
 
-    // Wait until all bytes have been written to the serial port
-    sleep(1);
+    unsigned char frame[5];
+
+    int n = 0;
+    while (n < 5) {
+        unsigned char b;
+        int r = readByteSerialPort(&b);
+
+        if (r == 1) {
+            frame[n] = b;
+            n++;
+        }
+    }
+
+    // checka se o frame recebido no UA está de acordo com o enunciado
+    if (frame[0] == FLAG && frame[1] == A_SENDER && frame[2] == C_UA && frame[3] == (A_SENDER ^ C_UA) && frame[4] == FLAG) {
+        printf("this UA is valid\n");
+    }
+    else {
+        printf("this UA is invalid\n");
+        return -1;
+    }
 
     // Close serial port
     if (closeSerialPort() < 0)
@@ -75,34 +93,38 @@ int llOpenRx(LinkLayer llParameters)
 
     printf("Serial port %s opened\n", llParameters.serialPort);
 
-    // Read from serial port until the 'z' char is received.
+    
 
-    // NOTE: This while() cycle is a simple example showing how to read from the serial port.
-    // It must be changed in order to respect the specifications of the protocol indicated in the Lab guide.
+    
 
-    // TODO: Save the received bytes in a buffer array and print it at the end of the program.
-    volatile int STOP = FALSE;
-    int nBytesBuf = 0;
+    unsigned char frame[5];
 
-    while (STOP == FALSE)
-    {
-        // Read one byte from serial port.
-        // NOTE: You must check how many bytes were actually read by reading the return value.
-        // In this example, we assume that the byte is always read, which may not be true.
-        unsigned char byte;
-        int bytes = readByteSerialPort(&byte);
-        nBytesBuf += bytes;
+    int n = 0;
+    while (n < 5) {
+        unsigned char b;
+        int r = readByteSerialPort(&b);
 
-        printf("Byte received: %c\n", byte);
-
-        if (byte == 'z')
-        {
-            printf("Received 'z' char. Stop reading from serial port.\n");
-            STOP = TRUE;
+        if (r == 1) {
+            frame[n] = b;
+            n++;
         }
     }
 
-    printf("Total bytes received: %d\n", nBytesBuf);
+    // checka se o frame recebido no SET está de acordo com o enunciado
+    if (frame[0] == FLAG && frame[1] == A_SENDER && frame[2] == C_SET && frame[3] == (A_SENDER ^ C_SET) && frame[4] == FLAG) {
+        printf("this SET is valid\n");
+
+        // constrói o UA para mandar de volta
+        unsigned char ua[5] = {FLAG, A_SENDER, C_UA, A_SENDER ^ C_UA, FLAG};
+        writeBytesSerialPort(ua, 5);
+        sleep(1);
+    }
+    else {
+        printf("this SET is invalid\n");
+        return -1;
+    }
+
+    for (int i = 0; i < 5; i++) { printf("var = 0x%02X\n", frame[i]); }
 
     // Close serial port
     if (closeSerialPort() < 0)
