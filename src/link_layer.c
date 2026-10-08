@@ -5,9 +5,10 @@
 #include "link_layer.h"
 #include "serial_port.h"
 
-#include <stdio.h>
-#include <unistd.h>
 #include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
@@ -113,7 +114,7 @@ int llOpenTx(LinkLayer llParameters)
                     case C_RCV:
                         if (b == FLAG){
                             state = FLAG_RCV;
-                        } else if (b == A_SENDER ^ C_UA){
+                        } else if (b == (A_SENDER ^ C_UA)){
                             state = BCC_OK;
                         } else{
                             state = START;
@@ -190,39 +191,72 @@ int llOpenRx(LinkLayer llParameters)
 
     printf("Serial port %s opened\n", llParameters.serialPort);
 
+    State state = START;
+    unsigned char b;
     
+    while(state != STOP){
 
-    
-
-    unsigned char frame[5];
-
-    // ler o frame
-    int n = 0;
-    while (n < 5) {
-        unsigned char b;
-        int r = readByteSerialPort(&b);
-
-        if (r == 1) {
-            frame[n] = b;
-            n++;
+            int r = readByteSerialPort(&b);
+            
+            if (r < 0) {
+                return -1;
+            } else if (r != 0){
+                switch (state){
+                    case START:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        }
+                        break;
+                    case FLAG_RCV:
+                        if (b != FLAG){
+                            if (b == A_SENDER){
+                                state = A_RCV;
+                            } else {
+                                state = START;
+                            }
+                        }
+                        break;
+                    case A_RCV:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b == C_SET){
+                            state = C_RCV;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case C_RCV:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b == (A_SENDER ^ C_SET)){
+                            state = BCC_OK;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case BCC_OK:
+                        if (b == FLAG){
+                            state = STOP;
+                        } else {
+                            state = START;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
         }
-    }
 
-    // checka se o frame recebido no SET está de acordo com o enunciado
-    if (frame[0] == FLAG && frame[1] == A_SENDER && frame[2] == C_SET && frame[3] == (A_SENDER ^ C_SET) && frame[4] == FLAG) {
-        printf("this SET is valid\n");
-
-        // constrói o UA para mandar de volta
-        unsigned char ua[5] = {FLAG, A_SENDER, C_UA, A_SENDER ^ C_UA, FLAG};
-        writeBytesSerialPort(ua, 5);
-        sleep(1);
-    }
-    else {
-        printf("this SET is invalid\n");
-        return -1;
-    }
-
-    for (int i = 0; i < 5; i++) { printf("var = 0x%02X\n", frame[i]); }
+        if (state == STOP){
+            unsigned char ua[5] = {FLAG, A_SENDER, C_UA, A_SENDER ^ C_UA, FLAG};
+            writeBytesSerialPort(ua, 5);
+            printf("valid SET!");
+            sleep(1);
+        } else {
+            printf("invalid SET!");
+            closeSerialPort();
+            return -1;
+        }
 
     // Close serial port
     if (closeSerialPort() < 0)
