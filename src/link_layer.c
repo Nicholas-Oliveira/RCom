@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
@@ -21,11 +22,14 @@
 
 #define C_SET 0x03
 #define C_UA 0x07
+#define C_IFN0 0x00
+#define C_IFN1 0x80
 
 typedef enum {START, FLAG_RCV, A_RCV, C_RCV, BCC_OK, STOP} State;
 
 int alarmEnabled = FALSE;
 int alarmCount = 0;
+static int Ns = 0;
 
 // Alarm function handler.
 // This function will run whenever the signal SIGALRM is received.
@@ -85,7 +89,10 @@ int llOpenTx(LinkLayer llParameters)
             int r = readByteSerialPort(&b);
             
             if (r < 0) {
-                return -1;
+                if (errno == EINTR){
+                } else{
+                    return -1;
+                }
             } else if (r != 0){
                 switch (state){
                     case START:
@@ -157,21 +164,21 @@ int llOpenTx(LinkLayer llParameters)
     // }
 
     if (state != STOP){
-        printf("no UA received. tried %d times", llParameters.nRetransmissions);
+        printf("no UA received. tried %d times\n", llParameters.nRetransmissions);
         closeSerialPort();
         return -1;
     }
 
-    printf("UA received successfully");
+    printf("UA received successfully\n");
 
     // Close serial port
-    if (closeSerialPort() < 0)
-    {
-        perror("closeSerialPort");
-        return -1;
-    }
+    // if (closeSerialPort() < 0)
+    // {
+    //     perror("closeSerialPort");
+    //     return -1;
+    // }
 
-    printf("Serial port %s closed\n", llParameters.serialPort);
+    // printf("Serial port %s closed\n", llParameters.serialPort);
 
     return 0;
 }
@@ -250,22 +257,22 @@ int llOpenRx(LinkLayer llParameters)
         if (state == STOP){
             unsigned char ua[5] = {FLAG, A_SENDER, C_UA, A_SENDER ^ C_UA, FLAG};
             writeBytesSerialPort(ua, 5);
-            printf("valid SET!");
+            printf("valid SET!\n");
             sleep(1);
         } else {
-            printf("invalid SET!");
+            printf("invalid SET!\n");
             closeSerialPort();
             return -1;
         }
 
     // Close serial port
-    if (closeSerialPort() < 0)
-    {
-        perror("closeSerialPort");
-        return -1;
-    }
+    // if (closeSerialPort() < 0)
+    // {
+    //     perror("closeSerialPort");
+    //     return -1;
+    // }
 
-    printf("Serial port %s closed\n", llParameters.serialPort);
+    // printf("Serial port %s closed\n", llParameters.serialPort);
 
     return 0;
 }
@@ -275,9 +282,64 @@ int llOpenRx(LinkLayer llParameters)
 ////////////////////////////////////////////////
 int llSend(const unsigned char *buf, int bufSize)
 {
-    // TODO: Implement this function
+    unsigned char inframe[2048];
 
-    return 0;
+    // usamos como índice. meto 3 porque começa em 0 e depois o 5º frame será o n=4
+    int index = 3;
+
+    // FLAG A C BCC D BCC2 FLAG
+    inframe[0] = FLAG;
+    inframe[1] = A_SENDER;
+    if (Ns == 0){
+        inframe[2] = C_IFN0;
+        inframe[3] = A_SENDER ^ C_IFN0;
+    } else if (Ns == 1){
+        inframe[2] = C_IFN1;
+        inframe[3] = A_SENDER ^ C_IFN1;
+    }
+
+    // percorremos todos os bytes do buffer de dados e metemos no information frame
+    for (int i = 0; i < bufSize; i++){
+        switch (buf[i]){
+            case 0x7E:
+                inframe[++index] = 0x7D;
+                inframe[++index] = 0x5E;
+                break;
+            case 0x7D:
+                inframe[++index] = 0x7D;
+                inframe[++index] = 0x5D;
+                break;
+            default:
+                inframe[++index] = buf[i];
+                break;
+        }
+    }
+
+    unsigned char bcc_2 = 0;
+    for (int i = 0; i < bufSize; i++){
+        bcc_2 ^= buf[i];
+    }
+
+    switch (bcc_2){
+            case 0x7E:
+                inframe[++index] = 0x7D;
+                inframe[++index] = 0x5E;
+                break;
+            case 0x7D:
+                inframe[++index] = 0x7D;
+                inframe[++index] = 0x5D;
+                break;
+            default:
+                inframe[++index] = bcc_2;
+                break;
+        }
+
+    inframe[++index] = FLAG;
+
+    int bytes = writeBytesSerialPort(inframe, index + 1);
+    printf("%d bytes written to serial port\n", bytes);
+
+    return bytes;
 }
 
 ////////////////////////////////////////////////
