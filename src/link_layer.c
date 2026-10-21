@@ -24,12 +24,17 @@
 #define C_UA 0x07
 #define C_IFN0 0x00
 #define C_IFN1 0x80
+#define C_RR0 0xAA
+#define C_RR1 0xAB
+#define C_REJ0 0x54
+#define C_REJ1 0x55
 
-typedef enum {START, FLAG_RCV, A_RCV, C_RCV, BCC_OK, STOP} State;
+typedef enum {START, FLAG_RCV, A_RCV, C_RCV, BCC_OK, STOP, ESCP_RCV} State;
 
 int alarmEnabled = FALSE;
 int alarmCount = 0;
 static int Ns = 0;
+static int expected_inframe = 0;
 
 // Alarm function handler.
 // This function will run whenever the signal SIGALRM is received.
@@ -180,6 +185,8 @@ int llOpenTx(LinkLayer llParameters)
 
     // printf("Serial port %s closed\n", llParameters.serialPort);
 
+    Ns = 0;
+
     return 0;
 }
 
@@ -258,7 +265,6 @@ int llOpenRx(LinkLayer llParameters)
             unsigned char ua[5] = {FLAG, A_SENDER, C_UA, A_SENDER ^ C_UA, FLAG};
             writeBytesSerialPort(ua, 5);
             printf("valid SET!\n");
-            sleep(1);
         } else {
             printf("invalid SET!\n");
             closeSerialPort();
@@ -273,6 +279,8 @@ int llOpenRx(LinkLayer llParameters)
     // }
 
     // printf("Serial port %s closed\n", llParameters.serialPort);
+
+    expected_inframe = 0;
 
     return 0;
 }
@@ -301,7 +309,7 @@ int llSend(const unsigned char *buf, int bufSize)
     // percorremos todos os bytes do buffer de dados e metemos no information frame
     for (int i = 0; i < bufSize; i++){
         switch (buf[i]){
-            case 0x7E:
+            case FLAG:
                 inframe[++index] = 0x7D;
                 inframe[++index] = 0x5E;
                 break;
@@ -347,9 +355,129 @@ int llSend(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llReceive(unsigned char *packet)
 {
-    // TODO: Implement this function
+    while (1){
 
-    return 0;
+        State state = START;
+        unsigned char b;
+        unsigned char data[2048];
+        int index = 0;
+    
+        unsigned char c = 0;
+        while(state != STOP){
+
+            int r = readByteSerialPort(&b);
+            
+            if (r < 0) {
+                return -1;
+            } else if (r != 0){
+                switch (state){
+                    case START:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        }
+                        break;
+                    case FLAG_RCV:
+                        if (b != FLAG){
+                            if (b == A_SENDER){
+                                state = A_RCV;
+                            } else {
+                                state = START;
+                            }
+                        }
+                        break;
+                    case A_RCV:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b == C_IFN0 || b == C_IFN1){
+                            state = C_RCV;
+                            c = b;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case C_RCV:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b == (A_SENDER ^ c)){
+                            state = BCC_OK;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case BCC_OK:
+                        if (b == FLAG){
+                            state = STOP;
+                        } else if (b == 0x7D){
+                            state = ESCP_RCV;
+                        } else{
+                            data[index++] = b;
+                        }
+                        break;
+                    case ESCP_RCV:
+                        data[index++] = b ^ 0x20;
+                        state = BCC_OK;
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+
+        if (index == 0) {continue;}
+
+
+        unsigned char bcc2 = data[index - 1];
+        unsigned char bcc2_real = 0;
+        for (int i = 0; i < index - 1; i++){
+            bcc2_real ^= data[i];
+        }
+
+        int n_frame = 0;
+        switch (c){
+            case C_IFN0: n_frame = 0; break;
+            case C_IFN1: n_frame = 1; break;
+        }
+
+        if (n_frame != expected_inframe){
+            // frame duplicado 
+
+            if (expected_inframe == 0){
+                unsigned char response[5] = {FLAG, A_SENDER, C_RR0, A_SENDER ^ C_RR0, FLAG};
+                writeBytesSerialPort(response, 5);
+            } else if (expected_inframe == 1){
+                unsigned char response[5] = {FLAG, A_SENDER, C_RR1, A_SENDER ^ C_RR1, FLAG};
+                writeBytesSerialPort(response, 5);
+            }
+        } else{
+            // frame novo
+
+            if (bcc2 != bcc2_real){
+                if (expected_inframe == 0){
+                    unsigned char response[5] = {FLAG, A_SENDER, C_REJ0, A_SENDER ^ C_REJ0, FLAG};
+                    writeBytesSerialPort(response, 5);
+                } else if (expected_inframe == 1){
+                    unsigned char response[5] = {FLAG, A_SENDER, C_REJ1, A_SENDER ^ C_REJ1, FLAG};
+                    writeBytesSerialPort(response, 5);
+                }
+            } else{
+                for (int i = 0; i < index - 1; i++){
+                    packet[i] = data[i];
+                }
+
+                if (expected_inframe == 0){
+                    unsigned char response[5] = {FLAG, A_SENDER, C_RR1, A_SENDER ^ C_RR1, FLAG};
+                    writeBytesSerialPort(response, 5);
+                    expected_inframe = 1;
+                } else if (expected_inframe == 1){
+                    unsigned char response[5] = {FLAG, A_SENDER, C_RR0, A_SENDER ^ C_RR0, FLAG};
+                    writeBytesSerialPort(response, 5);
+                    expected_inframe = 0;
+                }
+
+                return index - 1;
+            }
+        }
+    }
 }
 
 ////////////////////////////////////////////////
