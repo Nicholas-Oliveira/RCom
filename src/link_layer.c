@@ -35,6 +35,7 @@ int alarmEnabled = FALSE;
 int alarmCount = 0;
 static int Ns = 0;
 static int expected_inframe = 0;
+static int nRetransmissions, timeout;
 
 // Alarm function handler.
 // This function will run whenever the signal SIGALRM is received.
@@ -147,26 +148,6 @@ int llOpenTx(LinkLayer llParameters)
     }
         alarm(0);
 
-    // // receber o UA
-    // int n = 0;
-    // while (n < 5) {
-    //     unsigned char b;
-    //     int r = readByteSerialPort(&b);
-
-    //     if (r == 1) {
-    //         frame[n] = b;
-    //         n++;
-    //     }
-    // }
-
-    // // checka se o frame recebido no UA está de acordo com o enunciado
-    // if (frame[0] == FLAG && frame[1] == A_SENDER && frame[2] == C_UA && frame[3] == (A_SENDER ^ C_UA) && frame[4] == FLAG) {
-    //     printf("this UA is valid\n");
-    // }
-    // else {
-    //     printf("this UA is invalid\n");
-    //     return -1;
-    // }
 
     if (state != STOP){
         printf("no UA received. tried %d times\n", llParameters.nRetransmissions);
@@ -176,16 +157,9 @@ int llOpenTx(LinkLayer llParameters)
 
     printf("UA received successfully\n");
 
-    // Close serial port
-    // if (closeSerialPort() < 0)
-    // {
-    //     perror("closeSerialPort");
-    //     return -1;
-    // }
-
-    // printf("Serial port %s closed\n", llParameters.serialPort);
-
     Ns = 0;
+    nRetransmissions = llParameters.nRetransmissions;
+    timeout = llParameters.timeout;
 
     return 0;
 }
@@ -271,15 +245,6 @@ int llOpenRx(LinkLayer llParameters)
             return -1;
         }
 
-    // Close serial port
-    // if (closeSerialPort() < 0)
-    // {
-    //     perror("closeSerialPort");
-    //     return -1;
-    // }
-
-    // printf("Serial port %s closed\n", llParameters.serialPort);
-
     expected_inframe = 0;
 
     return 0;
@@ -291,6 +256,7 @@ int llOpenRx(LinkLayer llParameters)
 int llSend(const unsigned char *buf, int bufSize)
 {
     unsigned char inframe[2048];
+    alarmCount = 0;
 
     // usamos como índice. meto 3 porque começa em 0 e depois o 5º frame será o n=4
     int index = 3;
@@ -301,7 +267,7 @@ int llSend(const unsigned char *buf, int bufSize)
     if (Ns == 0){
         inframe[2] = C_IFN0;
         inframe[3] = A_SENDER ^ C_IFN0;
-    } else if (Ns == 1){
+    } else{
         inframe[2] = C_IFN1;
         inframe[3] = A_SENDER ^ C_IFN1;
     }
@@ -344,10 +310,107 @@ int llSend(const unsigned char *buf, int bufSize)
 
     inframe[++index] = FLAG;
 
-    int bytes = writeBytesSerialPort(inframe, index + 1);
-    printf("%d bytes written to serial port\n", bytes);
+    int bytes, stop = 0;
+    State state = START;
+    unsigned char b;
+    while (alarmCount < nRetransmissions && stop == 0){
+        state = START;
+        bytes = writeBytesSerialPort(inframe, index + 1);
 
-    return bytes;
+        alarm(timeout);
+        alarmEnabled = TRUE;
+
+        unsigned char c = 0;
+        while(alarmEnabled && state != STOP){
+            int r = readByteSerialPort(&b);
+            
+            if (r < 0) {
+                if (errno == EINTR){
+                } else{
+                    return -1;
+                }
+            } else if (r != 0){
+                switch (state){
+                    case START:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        }
+                        break;
+                    case FLAG_RCV:
+                        if (b != FLAG){
+                            if (b == A_SENDER){
+                                state = A_RCV;
+                            } else {
+                                state = START;
+                            }
+                        }
+                        break;
+                    case A_RCV:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b == C_RR0 || b == C_RR1 || b == C_REJ0 || b == C_REJ1){
+                            state = C_RCV;
+                            c = b;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case C_RCV:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b == (A_SENDER ^ c)){
+                            state = BCC_OK;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case BCC_OK:
+                        if (b == FLAG){
+                            state = STOP;
+                        } else {
+                            state = START;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+
+        alarm(0);
+
+        if (state == STOP){
+            if (c == C_RR0 || c == C_RR1){
+                int expected_ns;
+                switch (c){
+                    case C_RR0 : expected_ns = 0; break;
+                    case C_RR1 : expected_ns = 1; break;
+                }
+
+                if (expected_ns != Ns){
+                    stop = 1;
+                 
+                    switch (Ns){
+                        case 0 : Ns = 1; break;
+                        case 1 : Ns = 0; break;
+                    }
+                } else{
+                    alarmCount++;
+                }
+            }
+
+            if (c == C_REJ0 || c == C_REJ1){
+                alarmCount++;
+            }
+
+        }
+    }
+
+    if (stop == 0){
+        return -1;
+    } else{
+        return bytes;
+    }
 }
 
 ////////////////////////////////////////////////
