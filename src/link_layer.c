@@ -28,6 +28,7 @@
 #define C_RR1 0xAB
 #define C_REJ0 0x54
 #define C_REJ1 0x55
+#define C_DISC 0x0B
 
 typedef enum {START, FLAG_RCV, A_RCV, C_RCV, BCC_OK, STOP, ESCP_RCV} State;
 
@@ -548,14 +549,233 @@ int llReceive(unsigned char *packet)
 ////////////////////////////////////////////////
 int llCloseTx()
 {
-    // TODO: Implement this function
+
+    // envia o disc, espera o disc do rx e acaba por enviar o ua
+
+    alarmCount = 0;
+    unsigned char dc[5] = {FLAG, A_SENDER, C_DISC, A_SENDER ^ C_DISC, FLAG};
+
+    State state = START;
+    unsigned char b;
+    
+    while(alarmCount < nRetransmissions && state != STOP){
+        state = START;
+
+        int bytes = writeBytesSerialPort(dc, 5);
+        printf("%d bytes written to serial port\n", bytes);
+
+        // dar enable ao alarm
+        alarm(timeout);
+        alarmEnabled = TRUE;
+
+        while(alarmEnabled && state != STOP){
+            int r = readByteSerialPort(&b);
+            
+            if (r < 0) {
+                if (errno == EINTR){
+                } else{
+                    closeSerialPort();
+                    return -1;
+                }
+            } else if (r != 0){
+                switch (state){
+                    case START:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        }
+                        break;
+                    case FLAG_RCV:
+                        if (b != FLAG){
+                            if (b == A_RECEIVER){
+                                state = A_RCV;
+                            } else {
+                                state = START;
+                            }
+                        }
+                        break;
+                    case A_RCV:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b == C_DISC){
+                            state = C_RCV;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case C_RCV:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b == (A_RECEIVER ^ C_DISC)){
+                            state = BCC_OK;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case BCC_OK:
+                        if (b == FLAG){
+                            state = STOP;
+                        } else {
+                            state = START;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+    }
+    
+    alarm(0);
+
+    if (state != STOP){
+        printf("no DISC received. tried %d times\n", nRetransmissions);
+        closeSerialPort();
+        return -1;
+    }
+
+    unsigned char ua[5] = {FLAG, A_RECEIVER, C_UA, A_RECEIVER ^ C_UA, FLAG};
+    int bytes = writeBytesSerialPort(ua, 5);
+
+    if (bytes < 0){
+        closeSerialPort();
+        return -1;
+    }
+
+    closeSerialPort();
 
     return 0;
 }
 
 int llCloseRx()
 {
-    // TODO: Implement this function
 
+    // espera pelo disc do tx, envia o disc e espera pelo ua do tx
+
+    State state = START;
+    unsigned char b;
+    
+    while(state != STOP){
+
+            int r = readByteSerialPort(&b);
+            
+            if (r < 0) {
+                closeSerialPort();
+                return -1;
+            } else if (r != 0){
+                switch (state){
+                    case START:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        }
+                        break;
+                    case FLAG_RCV:
+                        if (b != FLAG){
+                            if (b == A_SENDER){
+                                state = A_RCV;
+                            } else {
+                                state = START;
+                            }
+                        }
+                        break;
+                    case A_RCV:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b == C_DISC){
+                            state = C_RCV;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case C_RCV:
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b == (A_SENDER ^ C_DISC)){
+                            state = BCC_OK;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case BCC_OK:
+                        if (b == FLAG){
+                            state = STOP;
+                        } else {
+                            state = START;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+
+
+    unsigned char dc[5] = {FLAG, A_RECEIVER, C_DISC, A_RECEIVER ^ C_DISC, FLAG};
+    int bytes = writeBytesSerialPort(dc, 5);
+
+    if (bytes < 0){
+        closeSerialPort();
+        return -1;
+    }
+
+    
+    state = START;
+    unsigned char b_;
+
+    while(state != STOP){
+
+            int r = readByteSerialPort(&b_);
+            
+            if (r < 0) {
+                closeSerialPort();
+                return -1;
+            } else if (r != 0){
+                switch (state){
+                    case START:
+                        if (b_ == FLAG){
+                            state = FLAG_RCV;
+                        }
+                        break;
+                    case FLAG_RCV:
+                        if (b_ != FLAG){
+                            if (b_ == A_RECEIVER){
+                                state = A_RCV;
+                            } else {
+                                state = START;
+                            }
+                        }
+                        break;
+                    case A_RCV:
+                        if (b_ == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b_ == C_UA){
+                            state = C_RCV;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case C_RCV:
+                        if (b_ == FLAG){
+                            state = FLAG_RCV;
+                        } else if (b_ == (A_RECEIVER ^ C_UA)){
+                            state = BCC_OK;
+                        } else{
+                            state = START;
+                        }
+                        break;
+                    case BCC_OK:
+                        if (b_ == FLAG){
+                            state = STOP;
+                        } else {
+                            state = START;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+
+
+    closeSerialPort();
     return 0;
 }
