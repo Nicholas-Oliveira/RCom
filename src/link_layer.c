@@ -38,6 +38,13 @@ static int Ns = 0;
 static int expected_inframe = 0;
 static int nRetransmissions, timeout;
 
+static int statIFramesSent = 0; // Tx: I frames sent (first attempt)
+static int statRetransmissions = 0; // Tx: I frames sent again
+static int statTimeouts = 0; // Tx: timer expired waiting for RR/REJ
+static int statRejSent = 0; // Rx: REJ frames sent
+static int statDuplicates = 0; // Rx: duplicate I frames received
+static int discSeen = 0;
+
 // Alarm function handler.
 // This function will run whenever the signal SIGALRM is received.
 void alarmHandler(int signal)
@@ -312,11 +319,15 @@ int llSend(const unsigned char *buf, int bufSize)
     inframe[++index] = FLAG;
 
     int bytes, stop = 0;
+    int attempt = 0;
     State state = START;
     unsigned char b;
     while (alarmCount < nRetransmissions && stop == 0){
         state = START;
         bytes = writeBytesSerialPort(inframe, index + 1);
+
+        if (attempt++ == 0) statIFramesSent++;
+        else statRetransmissions++;
 
         alarm(timeout);
         alarmEnabled = TRUE;
@@ -379,6 +390,8 @@ int llSend(const unsigned char *buf, int bufSize)
         }
 
         alarm(0);
+
+        if (state != STOP) statTimeouts++;
 
         if (state == STOP){
             if (c == C_RR0 || c == C_RR1){
@@ -452,7 +465,7 @@ int llReceive(unsigned char *packet)
                     case A_RCV:
                         if (b == FLAG){
                             state = FLAG_RCV;
-                        } else if (b == C_IFN0 || b == C_IFN1){
+                        } else if (b == C_IFN0 || b == C_IFN1 || b == C_DISC){
                             state = C_RCV;
                             c = b;
                         } else{
@@ -486,7 +499,10 @@ int llReceive(unsigned char *packet)
                 }
             }
         }
-
+        if (c == C_DISC) {
+            discSeen = 1;
+            return -1;
+        }
         if (index == 0) {continue;}
 
 
@@ -503,6 +519,7 @@ int llReceive(unsigned char *packet)
         }
 
         if (n_frame != expected_inframe){
+            statDuplicates++;
             // frame duplicado 
 
             if (expected_inframe == 0){
@@ -516,6 +533,7 @@ int llReceive(unsigned char *packet)
             // frame novo
 
             if (bcc2 != bcc2_real){
+                statRejSent++;
                 if (expected_inframe == 0){
                     unsigned char response[5] = {FLAG, A_SENDER, C_REJ0, A_SENDER ^ C_REJ0, FLAG};
                     writeBytesSerialPort(response, 5);
@@ -549,6 +567,13 @@ int llReceive(unsigned char *packet)
 ////////////////////////////////////////////////
 int llCloseTx()
 {
+
+
+    printf("\n--- Transmitter statistics ---\n");
+    printf("I frames sent:   %d\n", statIFramesSent);
+    printf("Retransmissions: %d\n", statRetransmissions);
+    printf("Timeouts:        %d\n", statTimeouts);
+    printf("------------------------------\n");
 
     // envia o disc, espera o disc do rx e acaba por enviar o ua
 
@@ -649,10 +674,18 @@ int llCloseTx()
 int llCloseRx()
 {
 
+    printf("\n--- Receiver statistics ---\n");
+    printf("REJ sent:   %d\n", statRejSent);
+    printf("Duplicates: %d\n", statDuplicates);
+    printf("---------------------------\n");
+
     // espera pelo disc do tx, envia o disc e espera pelo ua do tx
 
     State state = START;
     unsigned char b;
+    if (discSeen) {
+        state = STOP;
+    }
     
     while(state != STOP){
 
