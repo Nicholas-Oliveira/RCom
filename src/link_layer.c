@@ -408,15 +408,8 @@ int llSend(const unsigned char *buf, int bufSize)
                         case 0 : Ns = 1; break;
                         case 1 : Ns = 0; break;
                     }
-                } else{
-                    alarmCount++;
                 }
             }
-
-            if (c == C_REJ0 || c == C_REJ1){
-                alarmCount++;
-            }
-
         }
     }
 
@@ -465,7 +458,7 @@ int llReceive(unsigned char *packet)
                     case A_RCV:
                         if (b == FLAG){
                             state = FLAG_RCV;
-                        } else if (b == C_IFN0 || b == C_IFN1 || b == C_DISC){
+                        } else if (b == C_IFN0 || b == C_IFN1 || b == C_DISC || b == C_SET){
                             state = C_RCV;
                             c = b;
                         } else{
@@ -484,15 +477,24 @@ int llReceive(unsigned char *packet)
                     case BCC_OK:
                         if (b == FLAG){
                             state = STOP;
-                        } else if (b == 0x7D){
+                        } else if (index >= MAX_PAYLOAD_SIZE + 1){
+                            // é demasiado grande então temos de descartar
+                            index = 0;
+                            state = START;
+                        }else if (b == 0x7D){
                             state = ESCP_RCV;
                         } else{
                             data[index++] = b;
                         }
                         break;
                     case ESCP_RCV:
-                        data[index++] = b ^ 0x20;
-                        state = BCC_OK;
+                        if (b == FLAG){
+                            state = FLAG_RCV;
+                            index = 0;
+                        } else {
+                            data[index++] = b ^ 0x20;
+                            state = BCC_OK;
+                        }
                         break;
                     default:
                         break;
@@ -503,6 +505,14 @@ int llReceive(unsigned char *packet)
             discSeen = 1;
             return -1;
         }
+
+        // se perdermos o UA e recebermos novamente o SET repomos o UA (dá fix ao erro do teste 6)
+        if (c == C_SET) {
+            unsigned char ua[5] = {FLAG, A_SENDER, C_UA, A_SENDER ^ C_UA, FLAG};
+            writeBytesSerialPort(ua, 5);
+            continue;
+        }
+
         if (index == 0) {continue;}
 
 
@@ -753,7 +763,9 @@ int llCloseRx()
     
     state = START;
     unsigned char b_;
+    unsigned char a_ = 0, c_ = 0;
 
+    // se em vez de chegar outro UA chegar um DISC temos de reenviar porque se perdeu (dá fix aos erros que tínhamos)
     while(state != STOP){
 
             int r = readByteSerialPort(&b_);
@@ -769,19 +781,19 @@ int llCloseRx()
                         }
                         break;
                     case FLAG_RCV:
-                        if (b_ != FLAG){
-                            if (b_ == A_RECEIVER){
-                                state = A_RCV;
-                            } else {
-                                state = START;
-                            }
+                        if (b_ == A_RECEIVER || b_ == A_SENDER){
+                            state = A_RCV;
+                            a_ = b_;
+                        } else if (b_ != FLAG){
+                            state = START;
                         }
                         break;
                     case A_RCV:
                         if (b_ == FLAG){
                             state = FLAG_RCV;
-                        } else if (b_ == C_UA){
+                        } else if ((a_ == A_RECEIVER && b_ == C_UA) || (a_ == A_SENDER && b_ == C_DISC)){
                             state = C_RCV;
+                            c_ = b_;
                         } else{
                             state = START;
                         }
@@ -789,7 +801,7 @@ int llCloseRx()
                     case C_RCV:
                         if (b_ == FLAG){
                             state = FLAG_RCV;
-                        } else if (b_ == (A_RECEIVER ^ C_UA)){
+                        } else if (b_ == (a_ ^ c_)){
                             state = BCC_OK;
                         } else{
                             state = START;
@@ -797,7 +809,12 @@ int llCloseRx()
                         break;
                     case BCC_OK:
                         if (b_ == FLAG){
-                            state = STOP;
+                            if (c_ == C_DISC){
+                                writeBytesSerialPort(dc, 5);
+                                state = START;
+                            } else {
+                                state = STOP;
+                            }
                         } else {
                             state = START;
                         }
