@@ -69,6 +69,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         start[index++] = strlen(filename);    
         for (int i = 0; i < strlen(filename); i++) start[index++] = filename[i];
 
+        printf("Sending START packet: fileSize=%ld, filename=%s\n", fileSize, filename);
 
         if (llSend(start, index) < 0) {
             printf("llSend failed\n");
@@ -79,6 +80,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
         unsigned char data[MAX_PAYLOAD_SIZE];
         int bytesRead;
+
+        printf("Sending data packets...\n");
 
         while ((bytesRead = fread(&data[3], 1, MAX_CHUNK, f)) > 0) {
             data[0] = C_DATA;
@@ -93,11 +96,14 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             }
         }
 
+        printf("Sending END packet\n");
+
         start[0] = C_END;
         llSend(start, index);
 
         fclose(f);
         llCloseTx();
+        printf("Transfer complete\n");
 
     }
     else if (strcmp(role, "rx") == 0)
@@ -130,6 +136,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
                     pos += l;
                 }
+                printf("Received START: expected size=%ld bytes\n", expectedSize);
 
                 out = fopen(filename, "wb");
                 if (out == NULL) { 
@@ -147,10 +154,13 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 }
                 int k = 256 * packet[1] + packet[2];
                 written += fwrite(&packet[3], 1, k, out);
+                printf("Written %d bytes\n", k);
             }
 
             else if (packet[0] == C_END) break;
         }
+
+        printf("Received END packet\n");
 
         if (out) {
             fclose(out);
