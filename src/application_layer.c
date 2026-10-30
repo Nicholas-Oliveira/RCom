@@ -4,6 +4,7 @@
 
 #include "application_layer.h"
 #include "link_layer.h"
+#include <time.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -34,6 +35,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
     if (strcmp(role, "tx") == 0)
     {
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
         if (llOpenTx(llParameters) < 0) return;
 
         FILE *f = fopen(filename, "rb");
@@ -104,6 +107,9 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         fclose(f);
         llCloseTx();
         printf("Transfer completed\n");
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+        if (secs > 0) printf("Time: %.2fs, R = %.0f bit/s, S = %.3f\n", secs, fileSize * 8.0 / secs, (fileSize * 8.0 / secs) / llParameters.baudRate);
 
     }
     else if (strcmp(role, "rx") == 0)
