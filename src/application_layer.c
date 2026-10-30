@@ -159,14 +159,29 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                     return; 
                 }
                 int k = 256 * packet[1] + packet[2];
+                if (k != size - 3) printf("Warning: DATA size field says %d, real payload is %d\n", k, size - 3);   // ADD
+
                 written += fwrite(&packet[3], 1, k, out);
                 printf("Written %d bytes\n", k);
             }
 
-            else if (packet[0] == C_END) break;
-        }
+            else if (packet[0] == C_END) {
+                    long endSize = 0;
+                    int pos = 1;
+                    while (pos < size) {
+                        int t = packet[pos++];
+                        int l = packet[pos++];
 
-        printf("Received END packet\n");
+                        if (t == T_SIZE) {
+                            for (int k = 0; k < l; k++) endSize = (endSize << 8) | packet[pos + k];
+                        }
+                        pos += l;
+                    }
+                    if (endSize != expectedSize) printf("Warning: END size %ld differs from START size %ld\n", endSize, expectedSize);
+                    printf("Received END packet\n");
+                    break;
+            }
+        }
 
         if (out) {
             fclose(out);
